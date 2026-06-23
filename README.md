@@ -15,6 +15,7 @@ This tool turns that into a reusable audit instead of a manual `where.exe` scave
 ## What it does
 
 - Reads the selected `PATH` scope: `Process`, `User`, `Machine`, or `All`
+- `All` now merges machine and user PATH entries in execution order, then appends process-only extras
 - Splits and normalizes entries
 - Flags missing directories and duplicate directories
 - Resolves the first hit plus shadowed copies for requested commands

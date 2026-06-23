@@ -30,26 +30,11 @@ function Get-NormalizedPath {
   }
 }
 
-function Get-SelectedPathString {
-  param([string]$SelectedScope)
-
-  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-  $processPath = [Environment]::GetEnvironmentVariable('Path', 'Process')
-
-  switch ($SelectedScope) {
-    'User' { if ($null -ne $userPath) { return $userPath }; return '' }
-    'Machine' { if ($null -ne $machinePath) { return $machinePath }; return '' }
-    'Process' { if ($null -ne $processPath) { return $processPath }; return '' }
-    default {
-      if ($null -ne $processPath) { return $processPath }
-      return ''
-    }
-  }
-}
-
 function Split-PathEntries {
-  param([string]$PathString)
+  param(
+    [string]$PathString,
+    [string]$Source
+  )
 
   $parts = @()
   if ([string]::IsNullOrWhiteSpace($PathString)) {
@@ -79,10 +64,49 @@ function Split-PathEntries {
       Exists     = $exists
       Resolved   = $resolved
       Normalized = Get-NormalizedPath $clean
+      Source     = $Source
     }
   }
 
   return $parts
+}
+
+function Get-SelectedPathEntries {
+  param([string]$SelectedScope)
+
+  $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+  $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  $processPath = [Environment]::GetEnvironmentVariable('Path', 'Process')
+
+  switch ($SelectedScope) {
+    'User' { return @(Split-PathEntries -PathString $userPath -Source 'User') }
+    'Machine' { return @(Split-PathEntries -PathString $machinePath -Source 'Machine') }
+    'Process' { return @(Split-PathEntries -PathString $processPath -Source 'Process') }
+    default {
+      $merged = @()
+      $merged += Split-PathEntries -PathString $machinePath -Source 'Machine'
+      $merged += Split-PathEntries -PathString $userPath -Source 'User'
+
+      $known = @{}
+      foreach ($entry in $merged) {
+        if ($entry.Normalized) {
+          $known[$entry.Normalized] = $true
+        }
+      }
+
+      foreach ($entry in (Split-PathEntries -PathString $processPath -Source 'Process')) {
+        if (-not $entry.Normalized -or -not $known.ContainsKey($entry.Normalized)) {
+          $entry.Source = 'Process extra'
+          $merged += $entry
+          if ($entry.Normalized) {
+            $known[$entry.Normalized] = $true
+          }
+        }
+      }
+
+      return @($merged)
+    }
+  }
 }
 
 function Get-CommandTargets {
@@ -185,7 +209,7 @@ function Convert-ToMarkdown {
     $lines += ''
     foreach ($duplicate in $Report.duplicates) {
       $positions = ($duplicate.positions -join ', ')
-      $lines += "- `$($duplicate.path)` at positions $positions"
+      $lines += "- `$($duplicate.path)` at positions $positions from $($duplicate.sources -join ', ')"
     }
     $lines += ''
   }
@@ -214,8 +238,7 @@ function Convert-ToMarkdown {
   return $lines -join [Environment]::NewLine
 }
 
-$selectedPath = Get-SelectedPathString $Scope
-$entries = Split-PathEntries $selectedPath
+$entries = @(Get-SelectedPathEntries $Scope)
 $targets = Get-CommandTargets -Requested $Command -RequestedFile $CommandFile
 
 $duplicates = $entries |
@@ -225,6 +248,7 @@ $duplicates = $entries |
     [pscustomobject]@{
       path      = if ($_.Group[0].Resolved) { $_.Group[0].Resolved } else { $_.Group[0].Clean }
       positions = @($_.Group | ForEach-Object { [array]::IndexOf($entries, $_) + 1 })
+      sources   = @($_.Group | ForEach-Object { $_.Source } | Select-Object -Unique)
       count     = $_.Count
     }
   }
@@ -262,6 +286,7 @@ $report = [pscustomobject]@{
       clean    = $_.Clean
       exists   = $_.Exists
       resolved = $_.Resolved
+      source   = $_.Source
     }
   })
   duplicates   = @($duplicates)
